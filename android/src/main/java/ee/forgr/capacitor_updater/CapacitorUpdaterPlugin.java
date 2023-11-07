@@ -167,7 +167,9 @@ public class CapacitorUpdaterPlugin extends Plugin {
       throw new RuntimeException("appId is required");
     }
     this.implementation.privateKey =
-      this.getConfig().getString("privateKey", defaultPrivateKey);
+      this.getConfig().getString("privateKey", "");
+    this.implementation.signingKey =
+      this.getConfig().getString("signingKey", "");
     this.implementation.statsUrl =
       this.getConfig().getString("statsUrl", statsUrlDefault);
     this.implementation.channelUrl =

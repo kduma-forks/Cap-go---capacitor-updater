@@ -29,6 +29,10 @@ import com.android.volley.toolbox.HttpHeaderParser;
 import com.android.volley.toolbox.JsonObjectRequest;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.plugin.WebView;
+import com.goterl.lazysodium.LazySodiumAndroid;
+import com.goterl.lazysodium.SodiumAndroid;
+import com.goterl.lazysodium.interfaces.SecretBox;
+
 import java.io.BufferedInputStream;
 import java.io.DataInputStream;
 import java.io.File;
@@ -41,6 +45,7 @@ import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
 import java.net.URL;
 import java.net.URLConnection;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.PrivateKey;
 import java.security.SecureRandom;
@@ -72,6 +77,7 @@ public class CapacitorUpdater {
   private static final String bundleDirectory = "versions";
 
   public static final String TAG = "Capacitor-updater";
+  private final LazySodiumAndroid lazySodium;
   public SharedPreferences.Editor editor;
   public SharedPreferences prefs;
 
@@ -90,8 +96,14 @@ public class CapacitorUpdater {
   public String channelUrl = "";
   public String appId = "";
   public String privateKey = "";
+  public String signingKey = "";
   public String deviceID = "";
   public int timeout = 20000;
+
+  public CapacitorUpdater() {
+    SodiumAndroid sodium = new SodiumAndroid();
+    lazySodium = new LazySodiumAndroid(sodium, StandardCharsets.UTF_8);
+  }
 
   private final FilenameFilter filter = new FilenameFilter() {
     @Override
@@ -514,41 +526,37 @@ public class CapacitorUpdater {
       Log.i(TAG, "Cannot found privateKey or sessionKey");
       return;
     }
-    try {
-      String ivB64 = ivSessionKey.split(":")[0];
-      String sessionKeyB64 = ivSessionKey.split(":")[1];
-      byte[] iv = Base64.decode(ivB64.getBytes(), Base64.DEFAULT);
-      byte[] sessionKey = Base64.decode(
-        sessionKeyB64.getBytes(),
-        Base64.DEFAULT
-      );
-      PrivateKey pKey = CryptoCipher.stringToPrivateKey(this.privateKey);
-      byte[] decryptedSessionKey = CryptoCipher.decryptRSA(sessionKey, pKey);
-      SecretKey sKey = CryptoCipher.byteToSessionKey(decryptedSessionKey);
-      byte[] content = new byte[(int) file.length()];
+    byte[] nonce = Base64.decode(ivSessionKey.split(":")[0].getBytes(), Base64.DEFAULT);
+    byte[] mac = Base64.decode(ivSessionKey.split(":")[1].getBytes(), Base64.DEFAULT);
+    byte[] signingKeyBytes = Base64.decode(signingKey.getBytes(), Base64.DEFAULT);
+    byte[] privateKeyBytes = Base64.decode(privateKey.getBytes(), Base64.DEFAULT);
 
-      try (
-        final FileInputStream fis = new FileInputStream(file);
-        final BufferedInputStream bis = new BufferedInputStream(fis);
-        final DataInputStream dis = new DataInputStream(bis)
-      ) {
-        dis.readFully(content);
-        dis.close();
-        byte[] decrypted = CryptoCipher.decryptAES(content, sKey, iv);
-        // write the decrypted string to the file
-        try (
-          final FileOutputStream fos = new FileOutputStream(
-            file.getAbsolutePath()
-          )
-        ) {
-          fos.write(decrypted);
-        }
+
+    SecretBox.Native secretBoxNative = (SecretBox.Native) lazySodium;
+
+    byte[] content = new byte[(int) file.length()];
+    try (
+      final FileInputStream fis = new FileInputStream(file);
+      final BufferedInputStream bis = new BufferedInputStream(fis);
+      final DataInputStream dis = new DataInputStream(bis)
+    ) {
+      dis.readFully(content);
+      dis.close();
+
+      byte[] decrypted = new byte[(int) file.length()];
+
+      boolean result = lazySodium.cryptoBoxOpenDetached(decrypted, content, mac, (int) file.length(), nonce, signingKeyBytes, privateKeyBytes);
+
+      if(!result) {
+        Log.i(TAG, "decryptFile fail");
+        this.sendStats("decrypt_fail", version);
+        throw new IOException("GeneralSecurityException");
       }
-    } catch (GeneralSecurityException e) {
-      Log.i(TAG, "decryptFile fail");
-      this.sendStats("decrypt_fail", version);
-      e.printStackTrace();
-      throw new IOException("GeneralSecurityException");
+
+      // write the decrypted string to the file
+      try (final FileOutputStream fos = new FileOutputStream(file.getAbsolutePath())) {
+        fos.write(decrypted);
+      }
     }
   }
 

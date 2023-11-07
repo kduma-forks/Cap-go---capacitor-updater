@@ -8,6 +8,7 @@ import Foundation
 import SSZipArchive
 import Alamofire
 import zlib
+import Sodium
 
 extension URL {
     var isDirectory: Bool {
@@ -236,6 +237,7 @@ extension CustomError: LocalizedError {
     public var appId: String = ""
     public var deviceID = UIDevice.current.identifierForVendor?.uuidString ?? ""
     public var privateKey: String = ""
+    public var signingKey: String = ""
 
     public var notifyDownload: (String, Int) -> Void = { _, _  in }
 
@@ -345,39 +347,65 @@ extension CustomError: LocalizedError {
     private func decryptFile(filePath: URL, sessionKey: String, version: String) throws {
         if self.privateKey.isEmpty || sessionKey.isEmpty  || sessionKey.components(separatedBy: ":").count != 2 {
             print("\(self.TAG) Cannot found privateKey or sessionKey")
+            
+            if(!self.signingKey.isEmpty){
+                throw CustomError.cannotDecode
+            }
+            
             return
         }
         do {
-            guard let rsaPrivateKey: RSAPrivateKey = .load(rsaPrivateKey: self.privateKey) else {
-                print("cannot decode privateKey", self.privateKey)
-                throw CustomError.cannotDecode
-            }
 
             let sessionKeyArray: [String] = sessionKey.components(separatedBy: ":")
-            guard let ivData: Data = Data(base64Encoded: sessionKeyArray[0]) else {
+            guard let nonce: Data = Data(base64Encoded: sessionKeyArray[0]) else {
                 print("cannot decode sessionKey", sessionKey)
                 throw CustomError.cannotDecode
             }
-
-            guard let sessionKeyDataEncrypted = Data(base64Encoded: sessionKeyArray[1]) else {
-                throw NSError(domain: "Invalid session key data", code: 1, userInfo: nil)
+            var nonceByteArray = [UInt8](repeating: 0, count: nonce.count)
+            nonce.copyBytes(to: &nonceByteArray, count: nonce.count)
+            
+            guard let mac: Data = Data(base64Encoded: sessionKeyArray[1]) else {
+                print("cannot decode sessionKey", sessionKey)
+                throw CustomError.cannotDecode
             }
-
-            guard let sessionKeyDataDecrypted = try? rsaPrivateKey.decrypt(data: sessionKeyDataEncrypted) else {
-                throw NSError(domain: "Failed to decrypt session key data", code: 2, userInfo: nil)
+            var macByteArray = [UInt8](repeating: 0, count: mac.count)
+            mac.copyBytes(to: &macByteArray, count: mac.count)
+            
+            guard let privateKeyBytes = Data(base64Encoded: self.privateKey) else {
+                throw NSError(domain: "Failed to read private key", code: 3, userInfo: nil)
             }
-
-            let aesPrivateKey = AES128Key(iv: ivData, aes128Key: sessionKeyDataDecrypted)
+            var privateKeyByteArray = [UInt8](repeating: 0, count: privateKeyBytes.count)
+            privateKeyBytes.copyBytes(to: &privateKeyByteArray, count: privateKeyBytes.count)
+            
+            guard let signingKeyBytes = Data(base64Encoded: self.signingKey) else {
+                throw NSError(domain: "Failed to read signing key", code: 3, userInfo: nil)
+            }
+            var signingKeyByteArray = [UInt8](repeating: 0, count: signingKeyBytes.count)
+            signingKeyBytes.copyBytes(to: &signingKeyByteArray, count: signingKeyBytes.count)
 
             guard let encryptedData = try? Data(contentsOf: filePath) else {
                 throw NSError(domain: "Failed to read encrypted data", code: 3, userInfo: nil)
             }
+            var encryptedDataByteArray = [UInt8](repeating: 0, count: encryptedData.count)
+            encryptedData.copyBytes(to: &encryptedDataByteArray, count: encryptedData.count)
 
-            guard let decryptedData = try? aesPrivateKey.decrypt(data: encryptedData) else {
+            
+            
+            let sodium = Sodium()
+            
+            let decryptedData = sodium.box.open(
+                authenticatedCipherText: encryptedDataByteArray,
+                senderPublicKey: signingKeyByteArray,
+                recipientSecretKey: privateKeyByteArray,
+                nonce: nonceByteArray,
+                mac: macByteArray
+            )
+            
+            if decryptedData == nil {
                 throw NSError(domain: "Failed to decrypt data", code: 4, userInfo: nil)
             }
 
-            try decryptedData.write(to: filePath)
+            try Data(decryptedData!).write(to: filePath)
         } catch {
             print("\(self.TAG) Cannot decode: \(filePath.path)", error)
             self.sendStats(action: "decrypt_fail", versionName: version)

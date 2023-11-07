@@ -8,6 +8,7 @@ def capacitor_pods
   pod 'SSZipArchive'
   pod 'Alamofire'
   pod 'Version'
+  pod 'Sodium'
 end
 
 target 'Plugin' do

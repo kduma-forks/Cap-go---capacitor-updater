@@ -67,7 +67,8 @@ public class CapacitorUpdaterPlugin: CAPPlugin {
             periodCheckDelay = periodCheckDelayValue
         }
 
-        implementation.privateKey = getConfig().getString("privateKey", self.defaultPrivateKey)!
+        implementation.privateKey = getConfig().getString("privateKey")!
+        implementation.signingKey = getConfig().getString("signingKey")!
         implementation.notifyDownload = notifyDownload
         implementation.PLUGIN_VERSION = self.PLUGIN_VERSION
         let config = (self.bridge?.viewController as? CAPBridgeViewController)?.instanceDescriptor().legacyConfig

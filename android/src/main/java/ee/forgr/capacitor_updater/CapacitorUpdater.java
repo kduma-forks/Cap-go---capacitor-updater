@@ -524,6 +524,14 @@ public class CapacitorUpdater {
       ivSessionKey.split(":").length != 2
     ) {
       Log.i(TAG, "Cannot found privateKey or sessionKey");
+
+
+      if(!this.signingKey.equals("") && !version.equals("builtin")){
+        this.sendStats("decrypt_fail", version);
+        throw new IOException("NonSignedReleaseInstallationAttempt");
+      }
+
+
       return;
     }
     byte[] nonce = Base64.decode(ivSessionKey.split(":")[0].getBytes(), Base64.DEFAULT);
